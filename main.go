@@ -1,11 +1,9 @@
 package main
 
 import (
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
@@ -33,15 +31,15 @@ const (
 	table = "songs"
 )
 
-type Category struct {
+type category struct {
 	baseURL string
 	count   int
 }
-type Artist struct {
+type artist struct {
 	url  string
 	name string
 }
-type Song struct {
+type song struct {
 	artist string
 	title  string
 	bpm    string
@@ -49,51 +47,59 @@ type Song struct {
 }
 
 func main() {
+	// Load environment
 	err := godotenv.Load()
-	info := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, os.Getenv("USER"), os.Getenv("PASSWORD"), db)
-	db, err := sql.Open("postgres", info)
 	if err != nil {
 		panic(err)
 	}
-	err = db.Ping()
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Connection successful")
+	// Connect to database
+
+	// info := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, os.Getenv("USER"), os.Getenv("PASSWORD"), db)
+	// db, err := sql.Open("postgres", info)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// err = db.Ping()
+	// if err != nil {
+	// 	panic(err)
+	// }
 
 	// sqlStatement := `
 	// INSERT INTO $1 (song, artist, bpm, year)
 	// VALUES ($2, $3, $4, $5)`
 	// _, err = db.Exec(sqlStatement)
-	defer db.Close()
+	// defer db.Close()
 
 	baseURL := "https://bpmdatabase.com/music/%s"
 	rawCategories := append(strings.Split("ABCDEFGHIJKLMNOPQRSTUVWXYZ", ""), "0-9")
+	pageChan := make(chan category)
+	artistChan := make(chan artist)
+	songChan := make(chan song)
 
-	pageChan := make(chan Category)
-	artistChan := make(chan Artist)
-	songChan := make(chan Song)
+	// make a request to each letter URL
 	for _, letter := range rawCategories {
 		url := fmt.Sprintf(baseURL, letter)
 		go getPageCount(pageChan, url)
 	}
+
 	for {
 		select {
 		case category := <-pageChan:
 			for i := 1; i <= category.count; i++ {
 				subURL := fmt.Sprintf("%s?page=%d", category.baseURL, i)
 				go getCategoryPage(artistChan, subURL)
-
 			}
+
 		case artist := <-artistChan:
 			go getArtistPage(songChan, artist.url)
+
 		case song := <-songChan:
 			fmt.Println(song.title)
 		}
-
 	}
 }
 
+// Generic method to take a URL and return a goquery Doc
 func getPage(url string) (*goquery.Document, error) {
 	res, err := http.Get(url)
 	if err != nil {
@@ -109,21 +115,9 @@ func getPage(url string) (*goquery.Document, error) {
 	}
 	return doc, nil
 }
-func getArtistPage(songChan chan Song, url string) {
-	doc, err := getPage(url)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	doc.Find("tbody > tr").Each(func(i int, row *goquery.Selection) {
-		artist := row.Find(".artist").Text()
-		title := row.Find(".title").Text()
-		bpm := row.Find(".bpm").Text()
-		year := row.Find(".year").Text()
-		songChan <- Song{artist, title, bpm, year}
-	})
-}
-func getPageCount(pageChan chan Category, url string) {
+
+// Take a category page and send the category and page count to pageChan
+func getPageCount(pageChan chan category, url string) {
 	doc, err := getPage(url)
 	if err != nil {
 		log.Println(err)
@@ -137,10 +131,12 @@ func getPageCount(pageChan chan Category, url string) {
 	if err != nil {
 		panic(err)
 	}
-	pageChan <- Category{url, pageNum}
+	pageChan <- category{url, pageNum}
 
 }
-func getCategoryPage(artistChan chan Artist, url string) {
+
+// Take a category page with artists and send all artists to artistChan
+func getCategoryPage(artistChan chan artist, url string) {
 	doc, err := getPage(url)
 	if err != nil {
 		log.Println(err)
@@ -152,6 +148,22 @@ func getCategoryPage(artistChan chan Artist, url string) {
 		if !success {
 			panic(fmt.Errorf("Could not find href for %s", url))
 		}
-		artistChan <- Artist{"https://bpmdatabase.com" + artistURL, name}
+		artistChan <- artist{"https://bpmdatabase.com" + artistURL, name}
+	})
+}
+
+// Take an artists page and send all of their songs to songChan
+func getArtistPage(songChan chan song, url string) {
+	doc, err := getPage(url)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	doc.Find("tbody > tr").Each(func(i int, row *goquery.Selection) {
+		artist := row.Find(".artist").Text()
+		title := row.Find(".title").Text()
+		bpm := row.Find(".bpm").Text()
+		year := row.Find(".year").Text()
+		songChan <- song{artist, title, bpm, year}
 	})
 }
