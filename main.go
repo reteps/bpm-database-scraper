@@ -1,10 +1,11 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +24,8 @@ CREATE TABLE songs (
 	song TEXT,
 	artist TEXT,
 	bpm INT,
-	year INT
+	year INT,
+	combo TEXT UNIQUE
 );
 */
 const (
@@ -56,21 +58,15 @@ func main() {
 	}
 	// Connect to database
 
-	// info := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, os.Getenv("USER"), os.Getenv("PASSWORD"), db)
-	// db, err := sql.Open("postgres", info)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// err = db.Ping()
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// sqlStatement := `
-	// INSERT INTO $1 (song, artist, bpm, year)
-	// VALUES ($2, $3, $4, $5)`
-	// _, err = db.Exec(sqlStatement)
-	// defer db.Close()
+	info := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, os.Getenv("USER"), os.Getenv("PASSWORD"), db)
+	db, err := sql.Open("postgres", info)
+	if err != nil {
+		panic(err)
+	}
+	err = db.Ping()
+	if err != nil {
+		panic(err)
+	}
 
 	baseURL := "https://bpmdatabase.com/music/%s"
 	rawCategories := append(strings.Split("ABCDEFGHIJKLMNOPQRSTUVWXYZ", ""), "0-9")
@@ -98,15 +94,35 @@ func main() {
 		case category := <-pageChan:
 			for i := 1; i <= category.count; i++ {
 				subURL := fmt.Sprintf("%s?page=%d", category.baseURL, i)
+				time.Sleep(50 * time.Millisecond)
 				go getCategoryPage(netClient, artistChan, subURL)
 			}
 
 		case artist := <-artistChan:
+			time.Sleep(50 * time.Millisecond)
 			go getArtistPage(netClient, songChan, artist.url)
 
 		case song := <-songChan:
-			count++
-			fmt.Println(song.title, count)
+			sqlStatement := `
+			INSERT INTO songs (song, artist, bpm, year, combo)
+			VALUES ($1, $2, $3, $4, $5)`
+			// defer db.Close()
+			year := song.year
+			if year == "—" || year == "-" || year == "" {
+				year = "0"
+			}
+			bpm := song.bpm
+			if bpm == "—" || bpm == "-" || bpm == "" {
+				bpm = "0"
+			}
+			_, err = db.Exec(sqlStatement, song.title, song.artist, bpm, year, song.title+" "+song.artist)
+			if err != nil && strings.Contains(err.Error(), "invalid") {
+				fmt.Println(song.title, song.artist, song.bpm, song.year)
+				panic(err)
+			} else {
+				count++
+				fmt.Println(song.title, count)
+			}
 		}
 	}
 }
@@ -130,16 +146,16 @@ func getPage(client http.Client, url string) (*goquery.Document, error) {
 
 // Take a category page and send the category and page count to pageChan
 func getPageCount(client http.Client, pageChan chan category, url string) {
-	time.Sleep(50 * time.Millisecond)
 	doc, err := getPage(client, url)
 	if err != nil {
-		if err.Error() == "502" || err.Error() == "500" {
+		if err.Error() == "502" || err.Error() == "500" || strings.Contains(err.Error(), "no such host") {
 			fmt.Printf("500/502 Error, retrying %s...\n", url)
+			time.Sleep(50 * time.Millisecond)
 			getPageCount(client, pageChan, url)
 			return
 		}
-		log.Println(err)
-		return
+		panic(err)
+		// return
 	}
 	pages, success := doc.Find("ul.pagination > li.last > a").Attr("href")
 	if !success {
@@ -155,16 +171,16 @@ func getPageCount(client http.Client, pageChan chan category, url string) {
 
 // Take a category page with artists and send all artists to artistChan
 func getCategoryPage(client http.Client, artistChan chan artist, url string) {
-	time.Sleep(50 * time.Millisecond)
 	doc, err := getPage(client, url)
 	if err != nil {
-		if err.Error() == "502" || err.Error() == "500" {
+		if err.Error() == "502" || err.Error() == "500" || strings.Contains(err.Error(), "no such host") {
 			fmt.Printf("500/502 Error, retrying %s...\n", url)
+			time.Sleep(50 * time.Millisecond)
 			getCategoryPage(client, artistChan, url)
 			return
 		}
-		log.Println(err)
-		return
+		panic(err)
+		// return
 	}
 	doc.Find("div.list-group > a").Each(func(i int, link *goquery.Selection) {
 		artistURL, success := link.Attr("href")
@@ -178,16 +194,16 @@ func getCategoryPage(client http.Client, artistChan chan artist, url string) {
 
 // Take an artists page and send all of their songs to songChan
 func getArtistPage(client http.Client, songChan chan song, url string) {
-	time.Sleep(50 * time.Millisecond)
 	doc, err := getPage(client, url)
 	if err != nil {
-		if err.Error() == "502" || err.Error() == "500" {
+		if err.Error() == "502" || err.Error() == "500" || strings.Contains(err.Error(), "no such host") {
 			fmt.Printf("500/502 Error, retrying %s...\n", url)
+			time.Sleep(50 * time.Millisecond)
 			getArtistPage(client, songChan, url)
 			return
 		}
-		log.Println(err)
-		return
+		panic(err)
+		// return
 	}
 	doc.Find("tbody > tr").Each(func(i int, row *goquery.Selection) {
 		artist := row.Find(".artist").Text()
