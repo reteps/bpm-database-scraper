@@ -1,5 +1,7 @@
 # bpm-database-scraper
 
+### No longer in use, if you find this also take a look at `tempo` search of echo nest api.
+- https://echonest.github.io/pyechonest/
 Language
 - Golang for concurrent requests and high speed
 Database
