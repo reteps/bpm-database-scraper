@@ -1,4 +1,4 @@
-package main
+package nil
 
 import (
 	"database/sql"
@@ -48,7 +48,6 @@ type song struct {
 	title  string
 	bpm    string
 	year   string
-	genre  string
 }
 
 func main() {
@@ -69,13 +68,11 @@ func main() {
 		panic(err)
 	}
 
-	baseURL := "https://www.beatport.com/tracks/all"
-	bpmURL := baseURL + "?bpm-low=%d&bpm-high=%d"
+	baseURL := "https://bpmdatabase.com/music/%s"
+	rawCategories := append(strings.Split("ABCDEFGHIJKLMNOPQRSTUVWXYZ", ""), "0-9")
 	pageChan := make(chan category)
+	artistChan := make(chan artist)
 	songChan := make(chan song)
-	bpmStart := 47
-	bpmEnd := 258
-
 	dialer := (&net.Dialer{
 		Timeout: 10 * time.Second,
 	}).DialContext
@@ -87,8 +84,8 @@ func main() {
 	}
 
 	// make a request to each letter URL
-	for i := bpmStart; i < bpmEnd; i++ {
-		url := fmt.Sprintf(bpmURL, i, i)
+	for _, letter := range rawCategories {
+		url := fmt.Sprintf(baseURL, letter)
 		go getPageCount(netClient, pageChan, url)
 	}
 	count := 0
@@ -96,37 +93,36 @@ func main() {
 		select {
 		case category := <-pageChan:
 			for i := 1; i <= category.count; i++ {
-				subURL := fmt.Sprintf("%s&page=%d", category.baseURL, i)
+				subURL := fmt.Sprintf("%s?page=%d", category.baseURL, i)
 				time.Sleep(50 * time.Millisecond)
-				go getCategoryPage(netClient, songChan, subURL)
+				go getCategoryPage(netClient, artistChan, subURL)
 			}
 
-		// case artist := <-artistChan:
-		// 	time.Sleep(50 * time.Millisecond)
-		// 	go getArtistPage(netClient, songChan, artist.url)
+		case artist := <-artistChan:
+			time.Sleep(50 * time.Millisecond)
+			go getArtistPage(netClient, songChan, artist.url)
 
 		case song := <-songChan:
-			fmt.Println(song.title, "|", song.artist, "|", song.bpm, "|", song.genre, "|", song.year)
-			// sqlStatement := `
-			// INSERT INTO songs (song, artist, bpm, year, genre)
-			// VALUES ($1, $2, $3, $4, $5)`
-			// // defer db.Close()
-			// year := song.year
-			// if year == "—" || year == "-" || year == "" {
-			// 	year = "0"
-			// }
-			// bpm := song.bpm
-			// if bpm == "—" || bpm == "-" || bpm == "" {
-			// 	bpm = "0"
-			// }
-			// _, err = db.Exec(sqlStatement, song.title, song.artist, bpm, year, song.title+" "+song.artist)
-			// if err != nil && strings.Contains(err.Error(), "invalid") {
-			// 	fmt.Println(song.title, song.artist, song.bpm, song.year)
-			// 	panic(err)
-			// } else {
-			count++
-			fmt.Println(song.title, count)
-			// }
+			sqlStatement := `
+			INSERT INTO songs (song, artist, bpm, year, combo)
+			VALUES ($1, $2, $3, $4, $5)`
+			// defer db.Close()
+			year := song.year
+			if year == "—" || year == "-" || year == "" {
+				year = "0"
+			}
+			bpm := song.bpm
+			if bpm == "—" || bpm == "-" || bpm == "" {
+				bpm = "0"
+			}
+			_, err = db.Exec(sqlStatement, song.title, song.artist, bpm, year, song.title+" "+song.artist)
+			if err != nil && strings.Contains(err.Error(), "invalid") {
+				fmt.Println(song.title, song.artist, song.bpm, song.year)
+				panic(err)
+			} else {
+				count++
+				fmt.Println(song.title, count)
+			}
 		}
 	}
 }
@@ -161,47 +157,59 @@ func getPageCount(client http.Client, pageChan chan category, url string) {
 		panic(err)
 		// return
 	}
-	pages := doc.Find("div.pag-numbers > a.pag-number").Last().Text()
-	if pages == "" {
-		pages = "1"
+	pages, success := doc.Find("ul.pagination > li.last > a").Attr("href")
+	if !success {
+		panic(fmt.Errorf("Could not find the number of pages for url %s", url))
 	}
-	// if !success {
-	// 	panic(fmt.Errorf("Could not find the number of pages for url %s", url))
-	// }
-	// fmt.Println(url, pages)
+	pageNum, err := strconv.Atoi(strings.Split(pages, "=")[1])
 	if err != nil {
 		panic(err)
 	}
-	val, _ := strconv.Atoi(pages)
-	pageChan <- category{url, val}
+	pageChan <- category{url, pageNum}
 
 }
 
 // Take a category page with artists and send all artists to artistChan
-func getCategoryPage(client http.Client, songChan chan song, url string) {
-	// fmt.Println("url=", url)
+func getCategoryPage(client http.Client, artistChan chan artist, url string) {
 	doc, err := getPage(client, url)
 	if err != nil {
 		if err.Error() == "502" || err.Error() == "500" || strings.Contains(err.Error(), "no such host") {
 			fmt.Printf("500/502 Error, retrying %s...\n", url)
 			time.Sleep(50 * time.Millisecond)
-			getCategoryPage(client, songChan, url)
+			getCategoryPage(client, artistChan, url)
 			return
 		}
 		panic(err)
 		// return
 	}
-	doc.Find("li.bucket-item").Each(func(i int, item *goquery.Selection) {
-		name, success := item.Attr("data-ec-name")
-		genre, success := item.Attr("data-ec-d3")
-		artists, success := item.Attr("data-ec-d1")
-		year := item.Find("p.buk-track-released").Text()
+	doc.Find("div.list-group > a").Each(func(i int, link *goquery.Selection) {
+		artistURL, success := link.Attr("href")
+		name := link.Text()
 		if !success {
 			panic(fmt.Errorf("Could not find href for %s", url))
 		}
-		section := strings.Split(url, "&bpm-high=")[1]
-		bpm := strings.Split(section, "&")[0]
-		songChan <- song{artists, name, bpm, year, genre}
+		artistChan <- artist{"https://bpmdatabase.com" + artistURL, name}
+	})
+}
 
+// Take an artists page and send all of their songs to songChan
+func getArtistPage(client http.Client, songChan chan song, url string) {
+	doc, err := getPage(client, url)
+	if err != nil {
+		if err.Error() == "502" || err.Error() == "500" || strings.Contains(err.Error(), "no such host") {
+			fmt.Printf("500/502 Error, retrying %s...\n", url)
+			time.Sleep(50 * time.Millisecond)
+			getArtistPage(client, songChan, url)
+			return
+		}
+		panic(err)
+		// return
+	}
+	doc.Find("tbody > tr").Each(func(i int, row *goquery.Selection) {
+		artist := row.Find(".artist").Text()
+		title := row.Find(".title").Text()
+		bpm := row.Find(".bpm").Text()
+		year := row.Find(".year").Text()
+		songChan <- song{artist, title, bpm, year}
 	})
 }
