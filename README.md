@@ -1,6 +1,7 @@
 # bpm-database-scraper
 
-Scapes the website [bpmdatabase.com](http://bpmdatabase.com) For every songs BPM
+* `main.old` : Scapes the website [bpmdatabase.com](http://bpmdatabase.com) For every songs BPM
+* `main.go` : Uses the site beatport, does not work well.
 ## Language
 - Golang for concurrent requests and high speed
 ## Database
